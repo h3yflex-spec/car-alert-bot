@@ -11,9 +11,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
 }
 
-# -------------------------
-# Telegram
-# -------------------------
+
+# =========================
+# TELEGRAM
+# =========================
 
 def get_chat_id():
     response = requests.get(
@@ -49,12 +50,33 @@ def send_message(chat_id, text):
     print("Telegram:", response.text)
 
 
-# -------------------------
-# Kufar
-# -------------------------
+# =========================
+# КУРС USD
+# =========================
+
+def get_usd_rate():
+    response = requests.get(
+        "https://api.nbrb.by/exrates/rates/USD?parammode=2",
+        timeout=30
+    )
+
+    if response.status_code != 200:
+        raise Exception("Не удалось получить курс USD")
+
+    data = response.json()
+
+    rate = float(data["Cur_OfficialRate"])
+
+    print("Курс USD:", rate)
+
+    return rate
+
+
+# =========================
+# KUFAR
+# =========================
 
 def get_kufar_ads():
-
     response = requests.get(
         KUFAR_URL,
         headers=HEADERS,
@@ -89,44 +111,44 @@ def get_kufar_ads():
 
         product = item.get("item", {})
 
-        name = product.get("name", "Автомобиль")
+        name = product.get(
+            "name",
+            "Автомобиль"
+        )
 
-        image = product.get("image", "")
-
-        offers = product.get("offers", {})
+        offers = product.get(
+            "offers",
+            {}
+        )
 
         price_byn = float(
             offers.get("price", 0)
         )
 
-        url = offers.get("url", "")
+        url = offers.get(
+            "url",
+            ""
+        )
 
         if not url:
             continue
 
-        # Курс BYN → USD
-        # Пока используем приблизительный курс.
-        # Потом сделаем автоматический курс НБ РБ.
-        usd_rate = 3.2
-
-        price_usd = price_byn / usd_rate
-
         ads.append({
             "name": name,
             "price_byn": price_byn,
-            "price_usd": price_usd,
-            "url": url,
-            "image": image
+            "url": url
         })
 
     return ads
 
 
-# -------------------------
-# Main
-# -------------------------
+# =========================
+# ОСНОВНАЯ ПРОГРАММА
+# =========================
 
 chat_id = get_chat_id()
+
+usd_rate = get_usd_rate()
 
 ads = get_kufar_ads()
 
@@ -141,15 +163,23 @@ if not ads:
 
 else:
 
-    text = "🚗 <b>Новые объявления Kufar</b>\n\n"
+    text = (
+        "🚗 <b>Объявления Kufar</b>\n\n"
+        f"💱 Курс USD: {usd_rate:.4f} BYN\n\n"
+    )
 
     for ad in ads[:5]:
 
+        price_usd = ad["price_byn"] / usd_rate
+
         text += (
             f"🚘 <b>{ad['name']}</b>\n"
-            f"💵 ${ad['price_usd']:,.0f}\n"
+            f"💵 ${price_usd:,.0f}\n"
             f"💰 {ad['price_byn']:,.0f} BYN\n"
             f"🔗 <a href=\"{ad['url']}\">Открыть объявление</a>\n\n"
         )
 
-    send_message(chat_id, text)
+    send_message(
+        chat_id,
+        text
+    )
