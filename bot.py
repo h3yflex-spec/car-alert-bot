@@ -153,6 +153,7 @@ def get_kufar_ads(usd_rate):
             "item",
             {}
         )
+        print("PRODUCT:", json.dumps(product, ensure_ascii=False, indent=2))
 
         name = product.get(
             "name",
