@@ -3,29 +3,40 @@ import requests
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-response = requests.get(url)
+# Получаем последние сообщения из Telegram
+response = requests.get(
+    f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+)
+
+print("Telegram response:", response.text)
+
 data = response.json()
 
 if not data.get("ok"):
-    raise Exception("Telegram API error")
+    raise Exception(f"Telegram API error: {data}")
 
 updates = data.get("result", [])
 
 if not updates:
-    print("Нет сообщений от пользователя.")
+    print("Сообщений пока нет.")
     exit()
 
-chat_id = updates[-1]["message"]["chat"]["id"]
+# Берём последнее сообщение
+last_message = updates[-1].get("message")
 
-send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+if not last_message:
+    print("Последнее обновление не содержит сообщения.")
+    exit()
 
-requests.post(
-    send_url,
+chat_id = last_message["chat"]["id"]
+
+# Отправляем ответ
+send = requests.post(
+    f"https://api.telegram.org/bot{TOKEN}/sendMessage",
     json={
         "chat_id": chat_id,
-        "text": "🤖 Бот работает!\n\nТеперь можем подключать Kufar и AV.by 🚗"
+        "text": "🤖 Я тебя вижу!\n\nБот работает ✅\n\nСледующий этап — Kufar + AV.by 🚗"
     }
 )
 
-print("Сообщение отправлено!")
+print("Send response:", send.text)
