@@ -1,18 +1,31 @@
-import json
+import os
 import requests
 
-cfg = json.load(open("config.json", encoding="utf-8"))
+TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-TOKEN = cfg["telegram_token"]
-CHAT = cfg["chat_id"]
+url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+response = requests.get(url)
+data = response.json()
 
-def send(text):
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT,
-            "text": text
-        }
-    )
+if not data.get("ok"):
+    raise Exception("Telegram API error")
 
-send("✅ Бот успешно запустился!")
+updates = data.get("result", [])
+
+if not updates:
+    print("Нет сообщений от пользователя.")
+    exit()
+
+chat_id = updates[-1]["message"]["chat"]["id"]
+
+send_url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
+requests.post(
+    send_url,
+    json={
+        "chat_id": chat_id,
+        "text": "🤖 Бот работает!\n\nТеперь можем подключать Kufar и AV.by 🚗"
+    }
+)
+
+print("Сообщение отправлено!")
