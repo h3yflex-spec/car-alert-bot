@@ -11,6 +11,8 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36"
 }
 
+SENT_FILE = "sent_ads.json"
+
 
 # =========================
 # TELEGRAM
@@ -73,6 +75,38 @@ def get_usd_rate():
 
 
 # =========================
+# СОХРАНЕНИЕ ОБЪЯВЛЕНИЙ
+# =========================
+
+def load_sent_ads():
+    if not os.path.exists(SENT_FILE):
+        return set()
+
+    try:
+        with open(SENT_FILE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+
+        return set(data)
+
+    except Exception:
+        return set()
+
+
+def save_sent_ads(sent_ads):
+    with open(
+        SENT_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+        json.dump(
+            list(sent_ads),
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
+
+
+# =========================
 # KUFAR
 # =========================
 
@@ -90,7 +124,10 @@ def get_kufar_ads(usd_rate):
             f"Kufar вернул код {response.status_code}"
         )
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
 
     schema = soup.find(
         "script",
@@ -107,9 +144,15 @@ def get_kufar_ads(usd_rate):
 
     ads = []
 
-    for item in data.get("itemListElement", []):
+    for item in data.get(
+        "itemListElement",
+        []
+    ):
 
-        product = item.get("item", {})
+        product = item.get(
+            "item",
+            {}
+        )
 
         name = product.get(
             "name",
@@ -121,9 +164,11 @@ def get_kufar_ads(usd_rate):
             {}
         )
 
-        # Kufar отдаёт цену в сотых долях BYN
         price_byn = float(
-            offers.get("price", 0)
+            offers.get(
+                "price",
+                0
+            )
         ) / 100
 
         url = offers.get(
@@ -134,14 +179,17 @@ def get_kufar_ads(usd_rate):
         if not url:
             continue
 
-        # Переводим цену в USD
         price_usd = price_byn / usd_rate
 
-        # Оставляем только автомобили до $15 000
+        # Максимальная цена $15 000
         if price_usd > 15000:
             continue
 
+        # ID объявления берём из ссылки
+        ad_id = url.rstrip("/").split("/")[-1]
+
         ads.append({
+            "id": ad_id,
             "name": name,
             "price_byn": price_byn,
             "price_usd": price_usd,
@@ -159,34 +207,72 @@ chat_id = get_chat_id()
 
 usd_rate = get_usd_rate()
 
-ads = get_kufar_ads(usd_rate)
+ads = get_kufar_ads(
+    usd_rate
+)
 
-print("Найдено объявлений:", len(ads))
+print(
+    "Найдено подходящих объявлений:",
+    len(ads)
+)
 
-if not ads:
+sent_ads = load_sent_ads()
+
+# Первый запуск
+if not sent_ads:
+
+    for ad in ads:
+        sent_ads.add(ad["id"])
+
+    save_sent_ads(sent_ads)
 
     send_message(
         chat_id,
-        "😕 Kufar не вернул подходящих объявлений до $15 000."
+        "✅ <b>Мониторинг Kufar запущен!</b>\n\n"
+        f"Сейчас найдено объявлений: {len(ads)}\n"
+        "Текущие объявления запомнил.\n\n"
+        "🚨 Теперь буду присылать только новые объявления."
     )
 
 else:
 
-    text = (
-        "🚗 <b>Объявления Kufar до $15 000</b>\n\n"
-        f"💱 Курс USD: {usd_rate:.4f} BYN\n\n"
+    new_ads = []
+
+    for ad in ads:
+
+        if ad["id"] not in sent_ads:
+            new_ads.append(ad)
+            sent_ads.add(ad["id"])
+
+    save_sent_ads(sent_ads)
+
+    print(
+        "Новых объявлений:",
+        len(new_ads)
     )
 
-    for ad in ads[:5]:
+    if new_ads:
 
-        text += (
-            f"🚘 <b>{ad['name']}</b>\n"
-            f"💵 ${ad['price_usd']:,.0f}\n"
-            f"💰 {ad['price_byn']:,.0f} BYN\n"
-            f"🔗 <a href=\"{ad['url']}\">Открыть объявление</a>\n\n"
+        text = (
+            "🚨 <b>Новые объявления Kufar!</b>\n\n"
         )
 
-    send_message(
-        chat_id,
-        text
-    )
+        for ad in new_ads[:5]:
+
+            text += (
+                f"🚘 <b>{ad['name']}</b>\n"
+                f"💵 ${ad['price_usd']:,.0f}\n"
+                f"💰 {ad['price_byn']:,.0f} BYN\n"
+                f"🔗 <a href=\"{ad['url']}\">Открыть объявление</a>\n\n"
+            )
+
+        send_message(
+            chat_id,
+            text
+        )
+
+    else:
+
+        print(
+            "Новых объявлений нет."
+        )
