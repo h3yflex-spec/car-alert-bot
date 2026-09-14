@@ -277,3 +277,14 @@ else:
         print(
             "Новых объявлений нет."
         )
+AV_URL = "https://cars.av.by/filter?price_usd[max]=1600&transmission_type[0]=1&transmission_type[1]=3&transmission_type[2]=4&place_region[0]=1005"
+
+response = requests.get(
+    AV_URL,
+    headers=HEADERS,
+    timeout=30
+)
+
+print("AV.by status:", response.status_code)
+print("AV.by length:", len(response.text))
+print(response.text[:5000])
