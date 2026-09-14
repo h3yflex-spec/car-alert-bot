@@ -46,6 +46,7 @@ response = requests.get(
 )
 
 print("Kufar status:", response.status_code)
+print(response.text[:5000])
 
 if response.status_code != 200:
     send_message(
