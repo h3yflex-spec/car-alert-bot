@@ -19,3 +19,5 @@ jobs:
       - run: pip install -r requirements.txt
 
       - run: python bot.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
