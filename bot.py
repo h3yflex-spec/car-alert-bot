@@ -76,7 +76,7 @@ def get_usd_rate():
 # KUFAR
 # =========================
 
-def get_kufar_ads():
+def get_kufar_ads(usd_rate):
     response = requests.get(
         KUFAR_URL,
         headers=HEADERS,
@@ -121,9 +121,10 @@ def get_kufar_ads():
             {}
         )
 
+        # Kufar отдаёт цену в сотых долях BYN
         price_byn = float(
             offers.get("price", 0)
-        )
+        ) / 100
 
         url = offers.get(
             "url",
@@ -133,9 +134,17 @@ def get_kufar_ads():
         if not url:
             continue
 
+        # Переводим цену в USD
+        price_usd = price_byn / usd_rate
+
+        # Оставляем только автомобили до $15 000
+        if price_usd > 15000:
+            continue
+
         ads.append({
             "name": name,
             "price_byn": price_byn,
+            "price_usd": price_usd,
             "url": url
         })
 
@@ -150,7 +159,7 @@ chat_id = get_chat_id()
 
 usd_rate = get_usd_rate()
 
-ads = get_kufar_ads()
+ads = get_kufar_ads(usd_rate)
 
 print("Найдено объявлений:", len(ads))
 
@@ -158,23 +167,21 @@ if not ads:
 
     send_message(
         chat_id,
-        "😕 Kufar не вернул объявления."
+        "😕 Kufar не вернул подходящих объявлений до $15 000."
     )
 
 else:
 
     text = (
-        "🚗 <b>Объявления Kufar</b>\n\n"
+        "🚗 <b>Объявления Kufar до $15 000</b>\n\n"
         f"💱 Курс USD: {usd_rate:.4f} BYN\n\n"
     )
 
     for ad in ads[:5]:
 
-        price_usd = ad["price_byn"] / usd_rate
-
         text += (
             f"🚘 <b>{ad['name']}</b>\n"
-            f"💵 ${price_usd:,.0f}\n"
+            f"💵 ${ad['price_usd']:,.0f}\n"
             f"💰 {ad['price_byn']:,.0f} BYN\n"
             f"🔗 <a href=\"{ad['url']}\">Открыть объявление</a>\n\n"
         )
