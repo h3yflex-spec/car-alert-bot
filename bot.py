@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import html
 import requests
 from bs4 import BeautifulSoup
 
@@ -10,10 +11,6 @@ from bs4 import BeautifulSoup
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 
-# Kufar:
-# Минск + Минская область
-# Цена до $1600
-# Годы 1990-2026
 KUFAR_URL = (
     "https://auto.kufar.by/l/r~minsk/cars"
     "?cur=USD"
@@ -34,6 +31,7 @@ HEADERS = {
 SENT_FILE = "sent_ads.json"
 
 MAX_PRICE_USD = 1600
+MAX_NEW_PER_RUN = 5
 
 
 # ============================================================
@@ -76,6 +74,26 @@ def send_message(chat_id, text):
     print("Telegram:", response.text)
 
 
+def send_photo(chat_id, photo, caption):
+    response = requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
+        json={
+            "chat_id": chat_id,
+            "photo": photo,
+            "caption": caption,
+            "parse_mode": "HTML"
+        },
+        timeout=30
+    )
+
+    print("Telegram photo:", response.text)
+
+    try:
+        return response.json().get("ok", False)
+    except Exception:
+        return False
+
+
 # ============================================================
 # КУРС USD
 # ============================================================
@@ -99,7 +117,7 @@ def get_usd_rate():
 
 
 # ============================================================
-# СОХРАНЕНИЕ УЖЕ ОТПРАВЛЕННЫХ ОБЪЯВЛЕНИЙ
+# СОХРАНЕНИЕ ОБЪЯВЛЕНИЙ
 # ============================================================
 
 def load_sent_ads():
@@ -182,12 +200,10 @@ def extract_mileage(text):
     if not match:
         return None
 
-    value = match.group(1)
-
     value = re.sub(
         r"\s+",
         "",
-        value
+        match.group(1)
     )
 
     try:
@@ -197,26 +213,171 @@ def extract_mileage(text):
 
 
 def detect_transmission(text):
-    text = text.lower()
+    text = (text or "").lower()
 
-    if "вариатор" in text:
+    if "вариатор" in text or "cvt" in text:
         return "Вариатор"
 
-    if "робот" in text:
+    if "робот" in text or "dsg" in text:
         return "Робот"
 
-    if "автомат" in text:
-        return "Автомат"
-
-    if "акпп" in text:
+    if "автомат" in text or "акпп" in text:
         return "Автомат"
 
     return ""
 
 
 # ============================================================
-# ОЦЕНКА АВТОМОБИЛЯ
+# ОЦЕНКА МАРОК
 # ============================================================
+
+MODEL_RULES = {
+
+    "bmw": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 6
+    },
+
+    "mercedes": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 6
+    },
+
+    "audi": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 6
+    },
+
+    "volkswagen": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "toyota": {
+        "liquidity": 9,
+        "parts": 8,
+        "reliability": 9
+    },
+
+    "honda": {
+        "liquidity": 8,
+        "parts": 7,
+        "reliability": 9
+    },
+
+    "mazda": {
+        "liquidity": 8,
+        "parts": 7,
+        "reliability": 8
+    },
+
+    "ford": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "opel": {
+        "liquidity": 8,
+        "parts": 9,
+        "reliability": 7
+    },
+
+    "renault": {
+        "liquidity": 7,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "skoda": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "nissan": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "mitsubishi": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 8
+    },
+
+    "hyundai": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 8
+    },
+
+    "kia": {
+        "liquidity": 8,
+        "parts": 8,
+        "reliability": 8
+    },
+
+    "chevrolet": {
+        "liquidity": 7,
+        "parts": 8,
+        "reliability": 7
+    },
+
+    "peugeot": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 6
+    },
+
+    "citroen": {
+        "liquidity": 6,
+        "parts": 6,
+        "reliability": 6
+    },
+
+    "volvo": {
+        "liquidity": 6,
+        "parts": 6,
+        "reliability": 7
+    },
+
+    "fiat": {
+        "liquidity": 6,
+        "parts": 7,
+        "reliability": 6
+    },
+
+    "suzuki": {
+        "liquidity": 7,
+        "parts": 7,
+        "reliability": 8
+    },
+
+    "daewoo": {
+        "liquidity": 8,
+        "parts": 9,
+        "reliability": 7
+    },
+
+    "lada": {
+        "liquidity": 8,
+        "parts": 10,
+        "reliability": 6
+    },
+
+    "ваз": {
+        "liquidity": 8,
+        "parts": 10,
+        "reliability": 6
+    }
+}
+
 
 def rate_car(
     name,
@@ -224,106 +385,71 @@ def rate_car(
     mileage=None,
     transmission=""
 ):
-    """
-    Ориентировочная оценка автомобиля.
-
-    Это НЕ диагностика автомобиля.
-    Оценка строится по общим рыночным признакам.
-    """
 
     text = clean_text(name).lower()
 
-    # Базовые значения
-    liquidity = 6
-    parts = 7
-    reliability = 6
+    base = None
 
-    # --------------------------------------------------------
-    # Популярность бренда
-    # --------------------------------------------------------
+    for brand, values in MODEL_RULES.items():
 
-    popular_brands = [
-        "volkswagen",
-        "toyota",
-        "renault",
-        "ford",
-        "opel",
-        "skoda",
-        "audi",
-        "bmw",
-        "mercedes",
-        "hyundai",
-        "kia",
-        "nissan",
-        "mazda",
-        "mitsubishi",
-        "honda",
-        "chevrolet",
-        "peugeot",
-        "citroen",
-        "volvo",
-        "fiat",
-        "suzuki",
-        "daewoo",
-        "lada",
-        "ваз"
-    ]
+        if brand in text:
 
-    if any(
-        brand in text
-        for brand in popular_brands
-    ):
-        liquidity += 1
-        parts += 1
+            base = values.copy()
 
-    # --------------------------------------------------------
-    # Очень старые машины
-    # --------------------------------------------------------
+            break
+
+    if base is None:
+
+        base = {
+            "liquidity": 6,
+            "parts": 7,
+            "reliability": 6
+        }
+
+    liquidity = base["liquidity"]
+
+    parts = base["parts"]
+
+    reliability = base["reliability"]
+
+    # Возраст
 
     if year:
 
         if year < 1998:
+
             reliability -= 1
             liquidity -= 1
 
-        elif year >= 2005:
+        elif year >= 2010:
+
             reliability += 1
 
-    # --------------------------------------------------------
     # Пробег
-    # --------------------------------------------------------
 
     if mileage:
 
         if mileage > 400000:
+
             reliability -= 2
 
         elif mileage > 300000:
+
             reliability -= 1
 
         elif mileage < 200000:
+
             reliability += 1
 
-    # --------------------------------------------------------
-    # Старая автоматическая коробка
-    # --------------------------------------------------------
+    # Старые автоматы
 
     if transmission:
 
-        transmission_lower = transmission.lower()
+        if year and year < 2005:
 
-        if (
-            "автомат" in transmission_lower
-            or "робот" in transmission_lower
-            or "вариатор" in transmission_lower
-        ):
+            reliability -= 1
 
-            if year and year < 2005:
-                reliability -= 1
-
-    # --------------------------------------------------------
-    # Ограничиваем оценки
-    # --------------------------------------------------------
+    # Ограничение
 
     liquidity = max(
         1,
@@ -340,27 +466,19 @@ def rate_car(
         min(10, reliability)
     )
 
-    # --------------------------------------------------------
-    # Потенциал перепродажи
-    # --------------------------------------------------------
-
     resale = round(
         (
-            liquidity
-            + parts
+            liquidity +
+            parts
         ) / 2
     )
 
-    # --------------------------------------------------------
-    # Общая оценка
-    # --------------------------------------------------------
-
     total = round(
         (
-            liquidity
-            + parts
-            + reliability
-            + resale
+            liquidity +
+            parts +
+            reliability +
+            resale
         ) / 4,
         1
     )
@@ -392,6 +510,7 @@ def get_kufar_ads(usd_rate):
     )
 
     if response.status_code != 200:
+
         raise Exception(
             f"Kufar вернул код {response.status_code}"
         )
@@ -408,16 +527,19 @@ def get_kufar_ads(usd_rate):
     )
 
     if not schema:
+
         raise Exception(
             "Kufar не передал catalog-schema"
         )
 
     try:
+
         data = json.loads(
             schema.string
         )
 
     except Exception as error:
+
         raise Exception(
             f"Ошибка JSON Kufar: {error}"
         )
@@ -446,20 +568,23 @@ def get_kufar_ads(usd_rate):
             {}
         )
 
-        # Kufar отдаёт цену в копейках
         raw_price = offers.get(
             "price",
             0
         )
 
         try:
+
             price_byn = (
                 float(raw_price) / 100
             )
+
         except Exception:
+
             continue
 
         if price_byn <= 0:
+
             continue
 
         price_usd = (
@@ -467,6 +592,7 @@ def get_kufar_ads(usd_rate):
         )
 
         if price_usd > MAX_PRICE_USD:
+
             continue
 
         url = offers.get(
@@ -475,6 +601,7 @@ def get_kufar_ads(usd_rate):
         )
 
         if not url:
+
             continue
 
         ad_id = (
@@ -484,7 +611,6 @@ def get_kufar_ads(usd_rate):
             [-1]
         )
 
-        # Попытаемся получить характеристики
         description = clean_text(
             product.get(
                 "description",
@@ -493,9 +619,9 @@ def get_kufar_ads(usd_rate):
         )
 
         combined_text = (
-            name
-            + " "
-            + description
+            name +
+            " " +
+            description
         )
 
         year = extract_year(
@@ -510,10 +636,6 @@ def get_kufar_ads(usd_rate):
             combined_text
         )
 
-        # На этом этапе автомат
-        # определяется по данным объявления.
-        # Если Kufar не передал КПП в JSON-LD,
-        # объявление всё равно сохраняем.
         rating = rate_car(
             name=name,
             year=year,
@@ -521,24 +643,67 @@ def get_kufar_ads(usd_rate):
             transmission=transmission
         )
 
+        # Ищем фотографию
+
+        image = product.get(
+            "image",
+            ""
+        )
+
+        if isinstance(
+            image,
+            list
+        ):
+
+            if image:
+
+                image = image[0]
+
+            else:
+
+                image = ""
+
         ads.append({
-            "id": f"kufar_{ad_id}",
-            "source": "Kufar",
-            "name": name,
-            "price_byn": price_byn,
-            "price_usd": price_usd,
-            "url": url,
-            "year": year,
-            "mileage": mileage,
-            "transmission": transmission,
-            "rating": rating
+
+            "id":
+                f"kufar_{ad_id}",
+
+            "source":
+                "Kufar",
+
+            "name":
+                name,
+
+            "price_byn":
+                price_byn,
+
+            "price_usd":
+                price_usd,
+
+            "url":
+                url,
+
+            "image":
+                image or "",
+
+            "year":
+                year,
+
+            "mileage":
+                mileage,
+
+            "transmission":
+                transmission,
+
+            "rating":
+                rating
         })
 
     return ads
 
 
 # ============================================================
-# ФОРМИРОВАНИЕ TELEGRAM-СООБЩЕНИЯ
+# TELEGRAM — ФОРМАТ ОБЪЯВЛЕНИЯ
 # ============================================================
 
 def format_ad(ad):
@@ -552,28 +717,54 @@ def format_ad(ad):
     )
 
     mileage_text = (
+
         f"{ad['mileage']:,} км"
         .replace(",", " ")
+
         if ad["mileage"]
+
         else "не указан"
     )
 
     transmission_text = (
+
         ad["transmission"]
+
         if ad["transmission"]
+
         else "не указана"
     )
 
-    return (
-        f"🚗 <b>{ad['name']}</b>\n\n"
+    name = html.escape(
+        ad["name"]
+    )
 
-        f"📅 Год: {year_text}\n"
-        f"🛣 Пробег: {mileage_text}\n"
-        f"⚙️ КПП: {transmission_text}\n"
-        f"📍 Источник: {ad['source']}\n\n"
+    url = html.escape(
+        ad["url"],
+        quote=True
+    )
+
+    return (
+
+        "🆕 <b>НОВОЕ ОБЪЯВЛЕНИЕ</b>\n\n"
+
+        f"🚗 <b>{name}</b>\n\n"
 
         f"💵 <b>${ad['price_usd']:,.0f}</b>\n"
+
         f"💰 {ad['price_byn']:,.0f} BYN\n\n"
+
+        f"📅 Год: {year_text}\n"
+
+        f"🛣 Пробег: "
+        f"{mileage_text}\n"
+
+        f"⚙️ КПП: "
+        f"{transmission_text}\n"
+
+        f"📍 {ad['source']}\n\n"
+
+        "📊 <b>ОЦЕНКА</b>\n"
 
         f"💧 Ликвидность: "
         f"<b>{rating['liquidity']}/10</b>\n"
@@ -590,9 +781,58 @@ def format_ad(ad):
         f"⭐ <b>ИТОГ: "
         f"{rating['total']}/10</b>\n\n"
 
-        f"🔗 <a href=\"{ad['url']}\">"
-        f"Открыть объявление"
-        f"</a>"
+        f"🔗 <a href=\"{url}\">"
+        "Открыть объявление"
+        "</a>"
+    )
+
+
+# ============================================================
+# ОТПРАВКА ОБЪЯВЛЕНИЯ
+# ============================================================
+
+def send_ad(
+    chat_id,
+    ad
+):
+
+    caption = format_ad(ad)
+
+    image = ad.get(
+        "image",
+        ""
+    )
+
+    # Если есть фотография,
+    # пробуем отправить её
+
+    if image and image.startswith(
+        (
+            "http://",
+            "https://"
+        )
+    ):
+
+        # Telegram ограничивает caption 1024 символами
+
+        if len(caption) <= 1024:
+
+            success = send_photo(
+                chat_id,
+                image,
+                caption
+            )
+
+            if success:
+
+                return
+
+    # Если фото не удалось отправить —
+    # отправляем обычное сообщение
+
+    send_message(
+        chat_id,
+        caption
     )
 
 
@@ -601,27 +841,37 @@ def format_ad(ad):
 # ============================================================
 
 print("=" * 50)
-print("🚗 CAR ALERT BOT")
+
+print(
+    "🚗 CAR ALERT BOT"
+)
+
 print("=" * 50)
+
 
 chat_id = get_chat_id()
 
 usd_rate = get_usd_rate()
 
+
 print(
     "Получаем объявления Kufar..."
 )
 
+
 kufar_ads = get_kufar_ads(
     usd_rate
 )
+
 
 print(
     "Kufar найдено:",
     len(kufar_ads)
 )
 
+
 sent_ads = load_sent_ads()
+
 
 # ============================================================
 # ПЕРВЫЙ ЗАПУСК
@@ -630,6 +880,7 @@ sent_ads = load_sent_ads()
 if not sent_ads:
 
     for ad in kufar_ads:
+
         sent_ads.add(
             ad["id"]
         )
@@ -639,6 +890,7 @@ if not sent_ads:
     )
 
     send_message(
+
         chat_id,
 
         "✅ <b>Мониторинг запущен!</b>\n\n"
@@ -646,8 +898,10 @@ if not sent_ads:
         f"🚗 Найдено объявлений: "
         f"<b>{len(kufar_ads)}</b>\n\n"
 
-        "📍 Минск + Минская область\n"
+        "📍 Минск\n"
+
         "💵 До $1600\n"
+
         "⚙️ Автомат / робот / вариатор\n\n"
 
         "🚨 Старые объявления "
@@ -656,6 +910,7 @@ if not sent_ads:
         "Теперь буду присылать "
         "<b>только новые</b>."
     )
+
 
 # ============================================================
 # ПОСЛЕДУЮЩИЕ ЗАПУСКИ
@@ -688,13 +943,11 @@ else:
 
     if new_ads:
 
-        # Максимум 5 объявлений
-        # за один запуск
-        for ad in new_ads[:5]:
+        for ad in new_ads[:MAX_NEW_PER_RUN]:
 
-            send_message(
+            send_ad(
                 chat_id,
-                format_ad(ad)
+                ad
             )
 
     else:
@@ -703,6 +956,11 @@ else:
             "Новых объявлений нет."
         )
 
+
 print("=" * 50)
-print("Готово.")
+
+print(
+    "Готово."
+)
+
 print("=" * 50)
