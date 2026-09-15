@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import time
 import requests
 from bs4 import BeautifulSoup
 
@@ -25,7 +26,8 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/140.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"
+    "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 SENT_FILE = "sent_ads.json"
@@ -79,27 +81,21 @@ def send_message(chat_id, text):
 
     response = requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-
         json={
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": False
         },
-
         timeout=30
     )
 
-    print(
-        "Telegram:",
-        response.text
-    )
+    print("Telegram:", response.text)
 
     if not response.ok:
 
         raise Exception(
-            f"Telegram sendMessage error: "
-            f"{response.text}"
+            f"Telegram sendMessage error: {response.text}"
         )
 
 
@@ -126,10 +122,7 @@ def get_usd_rate():
         data["Cur_OfficialRate"]
     )
 
-    print(
-        "Курс USD:",
-        rate
-    )
+    print("Курс USD:", rate)
 
     return rate
 
@@ -206,6 +199,18 @@ def clean_text(value):
     ).strip()
 
 
+def normalize_text(value):
+
+    value = clean_text(value)
+
+    value = value.replace(
+        "\xa0",
+        " "
+    )
+
+    return value.strip()
+
+
 def extract_year(text):
 
     if not text:
@@ -231,6 +236,11 @@ def extract_mileage(text):
     if not text:
 
         return None
+
+    text = text.replace(
+        "\xa0",
+        " "
+    )
 
     match = re.search(
         r"(\d[\d\s]*)\s*(?:км|km)",
@@ -262,6 +272,12 @@ def detect_transmission(text):
         text or ""
     ).lower()
 
+    text = text.replace(
+        "\xa0",
+        " "
+    )
+
+    # Вариатор
     if (
         "вариатор" in text
         or "cvt" in text
@@ -269,6 +285,7 @@ def detect_transmission(text):
 
         return "Вариатор"
 
+    # Робот
     if (
         "робот" in text
         or "dsg" in text
@@ -276,6 +293,7 @@ def detect_transmission(text):
 
         return "Робот"
 
+    # Автомат
     if (
         "автомат" in text
         or "акпп" in text
@@ -283,7 +301,204 @@ def detect_transmission(text):
 
         return "Автомат"
 
+    # Механика
+    if (
+        "механика" in text
+        or "мкпп" in text
+    ):
+
+        return "Механика"
+
     return ""
+
+
+# ============================================================
+# ПОЛУЧЕНИЕ ХАРАКТЕРИСТИК СТРАНИЦЫ ОБЪЯВЛЕНИЯ
+# ============================================================
+
+def get_ad_characteristics(url):
+
+    print(
+        "Открываем объявление:",
+        url
+    )
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=30
+        )
+
+    except Exception as error:
+
+        print(
+            "Ошибка запроса объявления:",
+            error
+        )
+
+        return {
+            "year": None,
+            "mileage": None,
+            "transmission": ""
+        }
+
+    print(
+        "Страница объявления:",
+        response.status_code
+    )
+
+    if response.status_code != 200:
+
+        print(
+            "Не удалось открыть страницу объявления"
+        )
+
+        return {
+            "year": None,
+            "mileage": None,
+            "transmission": ""
+        }
+
+    soup = BeautifulSoup(
+        response.text,
+        "html.parser"
+    )
+
+    # --------------------------------------------------------
+    # Вариант 1.
+    # Ищем текст страницы целиком.
+    # --------------------------------------------------------
+
+    page_text = normalize_text(
+        soup.get_text(
+            " ",
+            strip=True
+        )
+    )
+
+    # --------------------------------------------------------
+    # Год
+    # --------------------------------------------------------
+
+    year = None
+
+    year_match = re.search(
+        r"(?:Год)\s*(?:19[8-9]\d|20[0-2]\d)",
+        page_text,
+        re.IGNORECASE
+    )
+
+    if year_match:
+
+        year = extract_year(
+            year_match.group(0)
+        )
+
+    # Если рядом с "Год" не нашли,
+    # пробуем обычный поиск.
+
+    if not year:
+
+        year = extract_year(
+            page_text
+        )
+
+    # --------------------------------------------------------
+    # Пробег
+    # --------------------------------------------------------
+
+    mileage = None
+
+    mileage_match = re.search(
+        r"Пробег[^0-9]{0,30}([\d\s\xa0]+)\s*(?:км|km)",
+        page_text,
+        re.IGNORECASE
+    )
+
+    if mileage_match:
+
+        mileage_text = (
+            mileage_match.group(1)
+            .replace("\xa0", " ")
+        )
+
+        mileage_text = re.sub(
+            r"\s+",
+            "",
+            mileage_text
+        )
+
+        try:
+
+            mileage = int(
+                mileage_text
+            )
+
+        except Exception:
+
+            mileage = None
+
+    # --------------------------------------------------------
+    # Коробка передач
+    # --------------------------------------------------------
+
+    transmission = ""
+
+    transmission_match = re.search(
+        r"Коробка\s+передач\s+(.{1,30}?)(?=\s+(?:Тип кузова|Привод|Количество|Состояние|Цвет|Тип двигателя|Объем|Характеристики|Описание))",
+        page_text,
+        re.IGNORECASE
+    )
+
+    if transmission_match:
+
+        transmission_value = normalize_text(
+            transmission_match.group(1)
+        )
+
+        transmission = detect_transmission(
+            transmission_value
+        )
+
+        if not transmission:
+
+            transmission = transmission_value
+
+    # --------------------------------------------------------
+    # Дополнительная попытка определить коробку
+    # --------------------------------------------------------
+
+    if not transmission:
+
+        # Берём небольшой участок после
+        # "Коробка передач"
+
+        match = re.search(
+            r"Коробка\s+передач(.{0,100})",
+            page_text,
+            re.IGNORECASE
+        )
+
+        if match:
+
+            transmission = detect_transmission(
+                match.group(1)
+            )
+
+    print(
+        "Характеристики:",
+        "год =", year,
+        "| пробег =", mileage,
+        "| КПП =", transmission
+    )
+
+    return {
+        "year": year,
+        "mileage": mileage,
+        "transmission": transmission
+    }
 
 
 # ============================================================
@@ -342,7 +557,6 @@ def rate_car(
         liquidity += 1
         parts += 1
 
-
     if year:
 
         if year < 1998:
@@ -353,7 +567,6 @@ def rate_car(
         elif year >= 2005:
 
             reliability += 1
-
 
     if mileage:
 
@@ -369,13 +582,11 @@ def rate_car(
 
             reliability += 1
 
-
     if transmission and year:
 
         if year < 2005:
 
             reliability -= 1
-
 
     liquidity = max(
         1,
@@ -392,14 +603,12 @@ def rate_car(
         min(10, reliability)
     )
 
-
     resale = round(
         (
             liquidity
             + parts
         ) / 2
     )
-
 
     total = round(
         (
@@ -411,17 +620,12 @@ def rate_car(
         1
     )
 
-
     return {
 
         "liquidity": liquidity,
-
         "parts": parts,
-
         "reliability": reliability,
-
         "resale": resale,
-
         "total": total
 
     }
@@ -434,11 +638,8 @@ def rate_car(
 def get_kufar_ads(usd_rate):
 
     response = requests.get(
-
         KUFAR_URL,
-
         headers=HEADERS,
-
         timeout=30
     )
 
@@ -447,7 +648,6 @@ def get_kufar_ads(usd_rate):
         response.status_code
     )
 
-
     if response.status_code != 200:
 
         raise Exception(
@@ -455,31 +655,22 @@ def get_kufar_ads(usd_rate):
             f"{response.status_code}"
         )
 
-
     soup = BeautifulSoup(
-
         response.text,
-
         "html.parser"
     )
 
-
     schema = soup.find(
-
         "script",
-
         id="catalog-schema",
-
         type="application/ld+json"
     )
-
 
     if not schema:
 
         raise Exception(
             "Kufar не передал catalog-schema"
         )
-
 
     try:
 
@@ -493,9 +684,7 @@ def get_kufar_ads(usd_rate):
             f"Ошибка JSON Kufar: {error}"
         )
 
-
     ads = []
-
 
     for item in data.get(
         "itemListElement",
@@ -507,28 +696,22 @@ def get_kufar_ads(usd_rate):
             {}
         )
 
-
         name = clean_text(
-
             product.get(
                 "name",
                 "Автомобиль"
             )
-
         )
-
 
         offers = product.get(
             "offers",
             {}
         )
 
-
         raw_price = offers.get(
             "price",
             0
         )
-
 
         try:
 
@@ -541,77 +724,68 @@ def get_kufar_ads(usd_rate):
 
             continue
 
-
         if price_byn <= 0:
 
             continue
-
 
         price_usd = (
             price_byn
             / usd_rate
         )
 
-
         if price_usd > MAX_PRICE_USD:
 
             continue
-
 
         url = offers.get(
             "url",
             ""
         )
 
-
         if not url:
 
             continue
 
-
         ad_id = (
-
             url
             .rstrip("/")
             .split("/")
             [-1]
-
         )
 
+        # ----------------------------------------------------
+        # Получаем реальные характеристики объявления
+        # ----------------------------------------------------
 
-        description = clean_text(
+        characteristics = get_ad_characteristics(
+            url
+        )
 
-            product.get(
-                "description",
-                ""
+        year = characteristics["year"]
+
+        mileage = characteristics["mileage"]
+
+        transmission = characteristics["transmission"]
+
+        # ----------------------------------------------------
+        # ВАЖНО:
+        # оставляем только автомат / робот / вариатор
+        # ----------------------------------------------------
+
+        if transmission not in [
+            "Автомат",
+            "Робот",
+            "Вариатор"
+        ]:
+
+            print(
+                "Пропускаем:",
+                name,
+                "| КПП:",
+                transmission
             )
 
-        )
-
-
-        combined_text = (
-
-            name
-            + " "
-            + description
-
-        )
-
-
-        year = extract_year(
-            combined_text
-        )
-
-
-        mileage = extract_mileage(
-            combined_text
-        )
-
-
-        transmission = detect_transmission(
-            combined_text
-        )
-
+            continue
 
         rating = rate_car(
 
@@ -624,7 +798,6 @@ def get_kufar_ads(usd_rate):
             transmission=transmission
 
         )
-
 
         ads.append({
 
@@ -660,6 +833,10 @@ def get_kufar_ads(usd_rate):
 
         })
 
+        # Небольшая пауза между запросами
+        # чтобы не долбить Kufar слишком быстро.
+
+        time.sleep(0.5)
 
     return ads
 
@@ -672,7 +849,6 @@ def format_ad(ad):
 
     rating = ad["rating"]
 
-
     if ad["year"]:
 
         year_text = str(
@@ -683,20 +859,16 @@ def format_ad(ad):
 
         year_text = "не указан"
 
-
     if ad["mileage"]:
 
         mileage_text = (
-
             f"{ad['mileage']:,} км"
             .replace(",", " ")
-
         )
 
     else:
 
         mileage_text = "не указан"
-
 
     if ad["transmission"]:
 
@@ -706,10 +878,7 @@ def format_ad(ad):
 
     else:
 
-        transmission_text = (
-            "не указана"
-        )
-
+        transmission_text = "не указана"
 
     return (
 
@@ -717,14 +886,11 @@ def format_ad(ad):
 
         f"📅 Год: {year_text}\n"
 
-        f"🛣 Пробег: "
-        f"{mileage_text}\n"
+        f"🛣 Пробег: {mileage_text}\n"
 
-        f"⚙️ КПП: "
-        f"{transmission_text}\n"
+        f"⚙️ КПП: {transmission_text}\n"
 
-        f"📍 Источник: "
-        f"{ad['source']}\n\n"
+        f"📍 Источник: {ad['source']}\n\n"
 
         f"💵 <b>"
         f"${ad['price_usd']:,.0f}"
@@ -782,14 +948,12 @@ print(
     "Получаем объявления Kufar..."
 )
 
-
 kufar_ads = get_kufar_ads(
     usd_rate
 )
 
-
 print(
-    "Kufar найдено:",
+    "Kufar найдено подходящих:",
     len(kufar_ads)
 )
 
@@ -809,30 +973,24 @@ if not sent_ads:
         "Это первый запуск."
     )
 
-
-    # Сначала отправляем
-    # сообщение о запуске
-
     send_message(
 
         chat_id,
 
         "✅ <b>Мониторинг запущен!</b>\n\n"
 
-        f"🚗 Найдено объявлений: "
+        f"🚗 Найдено подходящих объявлений: "
         f"<b>{len(kufar_ads)}</b>\n\n"
 
         "💵 Лимит: до $1600\n"
 
+        "⚙️ КПП: автомат / робот / вариатор\n"
+
         "📍 Источник: Kufar\n\n"
 
-        "Сейчас отправлю первые "
-        "объявления."
+        "Сейчас отправлю первые объявления."
 
     )
-
-
-    # Отправляем максимум 5
 
     for ad in kufar_ads[
         :MAX_ADS_PER_RUN
@@ -846,20 +1004,15 @@ if not sent_ads:
 
         )
 
-
-    # Запоминаем ВСЕ найденные
-
     for ad in kufar_ads:
 
         sent_ads.add(
             ad["id"]
         )
 
-
     save_sent_ads(
         sent_ads
     )
-
 
     print(
         "Отправлено первых объявлений:",
@@ -878,7 +1031,6 @@ else:
 
     new_ads = []
 
-
     for ad in kufar_ads:
 
         if ad["id"] not in sent_ads:
@@ -887,12 +1039,10 @@ else:
                 ad
             )
 
-
     print(
         "Новых объявлений:",
         len(new_ads)
     )
-
 
     if new_ads:
 
@@ -912,11 +1062,9 @@ else:
                 ad["id"]
             )
 
-
         save_sent_ads(
             sent_ads
         )
-
 
         print(
             "Отправлено новых объявлений:",
@@ -925,7 +1073,6 @@ else:
                 MAX_ADS_PER_RUN
             )
         )
-
 
     else:
 
